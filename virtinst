@@ -1,15 +1,30 @@
 #!/bin/bash
-
+#
 # Based on file at: https://github.com/earlruby/create-vm
+#
+
+#
+# '-l' option for 'LOCATION':
+#
+# Fedora https://download.fedoraproject.org/pub/fedora/linux/releases/35/Server/x86_64/os
+#
+# Debian https://ftp.us.debian.org/debian/dists/stable/main/installer-amd64/
+#
+# Ubuntu https://us.archive.ubuntu.com/ubuntu/dists/focal/main/installer-amd64/
+#
+# Suse   https://download.opensuse.org/pub/opensuse/distribution/leap/42.3/repo/oss/
+#
 
 HOSTNAME=
-ISO_FQN=
+LOCATION=
 KS_FQN=
+DEBUG=
+
 RAM=16384
 VCPUS=8
 DISKSIZE=128
 BRIDGE=virbr0
-DEBUG=
+
 VM_IMAGE_DIR=~/images
 MAC=0a:$(openssl rand -hex 5 | sed 's/\(..\)/\1:/g; s/:$//')
 
@@ -22,7 +37,7 @@ This script will take an .iso file created by revisor and generate a VM from it.
 OPTIONS:
    -h      Show this message
    -n      Host name (required)
-   -i      Full path and name of the .iso file to use (required)
+   -l      Location of the installer to use (required) (cdrom is not working)
    -k      Full path and name of the Kickstart file to use (required)
    -r      RAM in MB (defaults to ${RAM})
    -c      Number of VCPUs (defaults to ${VCPUS})
@@ -33,15 +48,14 @@ OPTIONS:
 EOF
 }
 
-while getopts "h:n:i:k:r:c:s:b:m:v:d" option; do
-    case "${option}"
-    in
-        h) 
+while getopts "h:n:l:k:r:c:s:b:m:v:d" option; do
+    case "${option}" in
+        h)
             usage
             exit 0
             ;;
         n) HOSTNAME=${OPTARG};;
-        i) ISO_FQN=${OPTARG};;
+        l) LOCATION=${OPTARG};;
         k) KS_FQN=${OPTARG};;
         r) RAM=${OPTARG};;
         c) VCPUS=${OPTARG};;
@@ -58,7 +72,7 @@ done
     exit 1
 }
 
-[[ -z $ISO_FQN ]] && {
+[[ -z $LOCATION ]] && {
     echo "ERROR: ISO file name or http url is required"
     usage
     exit 1
@@ -66,7 +80,7 @@ done
 
 [[ -z $KS_FQN ]] && {
     echo "ERROR: KS file is not found"
-    usage 
+    usage
     exit 1
 }
 
@@ -79,6 +93,8 @@ KS_FILE=$(basename "$KS_FQN")
 
 mkdir -p $VM_IMAGE_DIR
 
+[[ -n "$DEBUG" ]] && set -xv
+
 virt-install \
     --connect=qemu:///system \
     --name="${HOSTNAME}" \
@@ -88,9 +104,8 @@ virt-install \
     --ram="${RAM}" \
     --vcpus="${VCPUS}" \
     --autostart \
-    --hvm \
-    --arch x86_64 \
-    --accelerate \
+    --arch=x86_64 \
+    --virt-type=kvm \
     --check-cpu \
     --os-type=generic \
     --force \
@@ -99,14 +114,16 @@ virt-install \
     --extra-args="ks=file:/${KS_FILE} console=tty0 console=ttyS0,115200n8 serial" \
     --initrd-inject="${KS_FQN}" \
     --graphics=none \
-    --location="${ISO_FQN}"
+    --location="${LOCATION}"
 
-if [[ ! -z $DEBUG ]]; then
+[[ -n "$DEBUG" ]] && {
+    set +xv
+
     # Connect to the console and watch the install
     virsh console "${HOSTNAME}"
     while [ "running" = "$(virsh domstate ${HOSTNAME})" ]; do sleep 0.1; done
     virsh start "${HOSTNAME}"
-fi
+}
 
 while :; do
     ip=$(arp -a | grep $MAC | awk '{ print $2 }' | sed 's/[()]//g')
