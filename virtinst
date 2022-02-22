@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# Based on file at: https://github.com/earlruby/create-vm
+
+HOSTNAME=
+ISO_FQN=
+KS_FQN=
+RAM=16384
+VCPUS=8
+DISKSIZE=128
+BRIDGE=virbr0
+DEBUG=
+VM_IMAGE_DIR=~/images
+MAC=0a:$(openssl rand -hex 5 | sed 's/\(..\)/\1:/g; s/:$//')
+
+usage() {
+cat << EOF
+usage: $0 options
+
+This script will take an .iso file created by revisor and generate a VM from it.
+
+OPTIONS:
+   -h      Show this message
+   -n      Host name (required)
+   -i      Full path and name of the .iso file to use (required)
+   -k      Full path and name of the Kickstart file to use (required)
+   -r      RAM in MB (defaults to ${RAM})
+   -c      Number of VCPUs (defaults to ${VCPUS})
+   -s      Amount of storage to allocate in GB (defaults to ${DISKSIZE})
+   -b      Bridge interface to use (defaults to ${BRIDGE})
+   -v      Verbose
+   -d      Debug mode
+EOF
+}
+
+while getopts "h:n:i:k:r:c:s:b:m:v:d" option; do
+    case "${option}"
+    in
+        h) 
+            usage
+            exit 0
+            ;;
+        n) HOSTNAME=${OPTARG};;
+        i) ISO_FQN=${OPTARG};;
+        k) KS_FQN=${OPTARG};;
+        r) RAM=${OPTARG};;
+        c) VCPUS=${OPTARG};;
+        s) DISKSIZE=${OPTARG};;
+        b) BRIDGE=${OPTARG};;
+        m) MAC=${OPTARG};;
+        d) DEBUG=1;;
+    esac
+done
+
+[[ -z $HOSTNAME ]] && {
+    echo "ERROR: Host name is required"
+    usage
+    exit 1
+}
+
+[[ -z $ISO_FQN ]] && {
+    echo "ERROR: ISO file name or http url is required"
+    usage
+    exit 1
+}
+
+[[ -z $KS_FQN ]] && {
+    echo "ERROR: KS file is not found"
+    usage 
+    exit 1
+}
+
+[[ ! -f $KS_FQN ]] && {
+    echo "ERROR: $KS_FQN file not found"
+    usage
+    exit 1
+}
+KS_FILE=$(basename "$KS_FQN")
+
+mkdir -p $VM_IMAGE_DIR
+
+virt-install \
+    --connect=qemu:///system \
+    --name="${HOSTNAME}" \
+    --bridge="${BRIDGE}" \
+    --mac="${MAC}" \
+    --disk="${VM_IMAGE_DIR}/${HOSTNAME}.img,bus=virtio,size=${DISKSIZE}" \
+    --ram="${RAM}" \
+    --vcpus="${VCPUS}" \
+    --autostart \
+    --hvm \
+    --arch x86_64 \
+    --accelerate \
+    --check-cpu \
+    --os-type=generic \
+    --force \
+    --watchdog=default \
+    --noautoconsole \
+    --extra-args="ks=file:/${KS_FILE} console=tty0 console=ttyS0,115200n8 serial" \
+    --initrd-inject="${KS_FQN}" \
+    --graphics=none \
+    --location="${ISO_FQN}"
+
+if [[ ! -z $DEBUG ]]; then
+    # Connect to the console and watch the install
+    virsh console "${HOSTNAME}"
+    while [ "running" = "$(virsh domstate ${HOSTNAME})" ]; do sleep 0.1; done
+    virsh start "${HOSTNAME}"
+fi
+
+while :; do
+    ip=$(arp -a | grep $MAC | awk '{ print $2 }' | sed 's/[()]//g')
+    [ -z "${ip}" ] || break
+    sleep 1
+done
+
+echo "Use 'ssh jxiong@${ip}' to log into the host"
+
+exit 0
